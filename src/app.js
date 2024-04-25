@@ -24,6 +24,7 @@ const accounts = require('../accounts');
 const serverChan = require('../serverChan');
 const telegramBot = require('../telegramBot');
 const wecomBot = require('../wecomBot');
+const wxpush = require('../wxPusher')
 
 const client = superagent.agent();
 const headers = {
@@ -189,7 +190,7 @@ const doLogin = (userName, password) => new Promise((resolve, reject) => {
 });
 
 // 任务 1.签到 2.天天抽红包 3.自动备份抽红包
-const doTask = async () => {
+const doTask = async (familyId) => {
   const tasks = [
     `https://cloud.189.cn/mkt/userSign.action?rand=${new Date().getTime()}&clientType=TELEANDROID&version=${config.version}&model=${config.model}`,
     'https://m.cloud.189.cn/v2/drawPrizeMarketDetails.action?taskId=TASK_SIGNIN&activityId=ACT_SIGNIN',
@@ -197,6 +198,7 @@ const doTask = async () => {
     'https://m.cloud.189.cn/v2/drawPrizeMarketDetails.action?taskId=TASK_2022_FLDFS_KJ&activityId=ACT_SIGNIN',
   ];
 
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const result = [];
   for (let index = 0; index < tasks.length; index += 1) {
     const task = tasks[index];
@@ -209,7 +211,13 @@ const doTask = async () => {
     } else {
       result.push(`第${index}次抽奖成功,抽奖获得${res.prizeName}`);
     }
+  await delay(5000); // 延迟5秒
+  if(familyId){
+    const url = `http://api.cloud.189.cn/family/manage/exeFamilyUserSign.action?familyId=${familyId}`
+    const res = await doGet(url);
+    console.log(res)
   }
+}
   return result;
 };
 
@@ -284,23 +292,49 @@ const pushWecomBot = (title, desp) => {
     });
 };
 
+const pushWxPusher = (title, desp) => {
+  if (!(wxpush.appToken && wxpush.uid)) { return; }
+  const data = {
+    appToken: wxpush.appToken,
+    contentType:1,
+    summary:title,
+    content:desp,
+    uids:[wxpush.uid]
+  };
+  superagent.post(`https://wxpusher.zjiecode.com/api/send/message`)
+  .send(data)
+  .end((err, res) => {
+    if (err) {
+      logger.error(`wxPusher推送失败:${JSON.stringify(err)}`);
+      return;
+    }
+    const json = JSON.parse(res.text);
+    if (json.data[0].code !==1000) {
+      logger.error(`wxPusher推送失败:${JSON.stringify(json)}`);
+    } else {
+      logger.info('wxPusher推送成功');
+    }
+  });
+}
+
 const push = (title, desp) => {
   pushServerChan(title, desp);
   pushTelegramBot(title, desp);
   pushWecomBot(title, desp);
+  pushWxPusher(title, desp);
 }
 
 // 开始执行程序
 async function main() {
   for (let index = 0; index < accounts.length; index += 1) {
     const account = accounts[index];
-    const { userName, password } = account;
+    const { userName, password, familyId } = account;
     if (userName && password) {
       const userNameInfo = mask(userName, 3, 7);
       try {
         logger.log(`账户 ${userNameInfo}开始执行`);
         await doLogin(userName, password);
-        const result = await doTask();
+        const result = await doTask(familyId);
         result.forEach((r) => logger.log(r));
         logger.log('任务执行完毕');
       } catch (e) {
